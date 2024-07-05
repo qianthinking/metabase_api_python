@@ -259,6 +259,7 @@ def clone_dashboard_new_database(
     return new_dashboard_id
 
 
+# TODO check parent id for column id mapping
 def clone_card_new_database(
     self,
     card_id,
@@ -283,6 +284,7 @@ def clone_card_new_database(
 
     assert type(cloned_card_mapping) == dict
 
+    source_table_id_name_set = set()
     # card already cloned, don't do it again
     if card_id in cloned_card_mapping:
         return cloned_card_mapping[card_id]
@@ -310,6 +312,7 @@ def clone_card_new_database(
 
         query_data = card_info["dataset_query"]["query"]
 
+
         # transform main source-table & columns
         source_table_id = query_data["source-table"]
         source_table_is_card = "card__" in str(source_table_id)
@@ -331,6 +334,7 @@ def clone_card_new_database(
                     cloned_card_mapping=cloned_card_mapping,
                 )
                 query_data["source-table"] = f"card__{cloned_card['id']}"
+            source_table_id_name_set.add((source_table_id, None))
 
         # source table is another table
         else:
@@ -349,31 +353,7 @@ def clone_card_new_database(
             source_database_table_id_name_mapping[source_table_id]["columns"] = (
                 self.get_columns_name_id(table_id=source_table_id, column_id_name=True)
             )
-
-        # transform breakout data
-        if "breakout" in query_data:
-            query_data_breakout_str = str(query_data["breakout"])
-
-            # search for Ids, when fields are string based, don't modify them as they will match new table
-            source_column_ids = re.findall("'field', (\d+)", query_data_breakout_str)
-            # replace column IDs from old table with the column IDs from new table
-            for source_col_id_str in source_column_ids:
-                source_col_id = int(source_col_id_str)
-
-                source_col_name = source_database_table_id_name_mapping[
-                    source_table_id
-                ]["columns"][source_col_id]
-                target_col_id = target_database_table_name_id_mapping[
-                    source_table_name
-                ]["columns"][source_col_name]
-                query_data_breakout_str = query_data_breakout_str.replace(
-                    "['field', {}, ".format(source_col_id),
-                    "['field', {}, ".format(target_col_id),
-                )
-
-            card_info["dataset_query"]["query"]["breakout"] = eval(
-                query_data_breakout_str
-            )
+            source_table_id_name_set.add((source_table_id, source_table_name))
 
         # transform each joins
         if "joins" in query_data:
@@ -383,6 +363,8 @@ def clone_card_new_database(
                 source_table_name = source_database_table_id_name_mapping[
                     source_table_id
                 ]["name"]
+                if (source_table_id, source_table_name) not in source_table_id_name_set:
+                    source_table_id_name_set.add((source_table_id, source_table_name))
                 target_table_id = target_database_table_name_id_mapping[
                     source_table_name
                 ]["id"]
@@ -417,6 +399,8 @@ def clone_card_new_database(
                         if source_col_id in table_detail["columns"]:
                             source_table_name = table_detail["name"]
                             source_col_name = table_detail["columns"][source_col_id]
+                            if (source_table_id, source_table_name) not in source_table_id_name_set:
+                                source_table_id_name_set.add((source_table_id, source_table_name))
                             break
                     target_col_id = target_database_table_name_id_mapping[
                         source_table_name
@@ -430,6 +414,66 @@ def clone_card_new_database(
                 updated_joins.append(updated_join)
 
             card_info["dataset_query"]["query"]["joins"] = updated_joins
+        # transform breakout data
+        for key in ["breakout", "aggregation", "filter", "order-by"]:
+            if key in query_data:
+                old_settings_str = str(query_data[key])
+
+                # search for Ids, when fields are string based, don't modify them as they will match new table
+                source_column_ids = re.findall("'field', (\d+)", old_settings_str)
+                # replace column IDs from old table with the column IDs from new table
+                for source_col_id_str in source_column_ids:
+                    source_col_id = int(source_col_id_str)
+
+                    for source_table_id, source_table_name in source_table_id_name_set:
+                        try:
+                            source_col_name = source_database_table_id_name_mapping[
+                                source_table_id
+                            ]["columns"][source_col_id]
+                            target_col_id = target_database_table_name_id_mapping[
+                                source_table_name
+                            ]["columns"][source_col_name]
+                            old_settings_str = old_settings_str.replace(
+                                "['field', {}, ".format(source_col_id),
+                                "['field', {}, ".format(target_col_id),
+                            )
+                            break
+                        except:
+                            pass
+
+                card_info["dataset_query"]["query"][key] = eval(
+                    old_settings_str
+                )
+
+
+    if card_info.get("visualization_settings"):
+        old_settings_str = str(card_info.get("visualization_settings"))
+
+        # search for Ids, when fields are string based, don't modify them as they will match new table
+        source_column_ids = re.findall("'field', (\d+)", old_settings_str)
+        # replace column IDs from old table with the column IDs from new table
+        for source_col_id_str in source_column_ids:
+            source_col_id = int(source_col_id_str)
+
+            for source_table_id, source_table_name in source_table_id_name_set:
+                try:
+                    source_col_name = source_database_table_id_name_mapping[
+                        source_table_id
+                    ]["columns"][source_col_id]
+                    target_col_id = target_database_table_name_id_mapping[
+                        source_table_name
+                    ]["columns"][source_col_name]
+                    old_settings_str = old_settings_str.replace(
+                        "['field', {}, ".format(source_col_id),
+                        "['field', {}, ".format(target_col_id),
+                    )
+                    break
+                except:
+                    pass
+
+        card_info["visualization_settings"] = eval(
+            old_settings_str
+        )
 
     new_card_json = {}
     for key in ["dataset_query", "display", "visualization_settings", "name"]:
